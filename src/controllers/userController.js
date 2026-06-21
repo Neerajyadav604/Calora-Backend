@@ -2,6 +2,14 @@ const { admin } = require('../config/firebase');
 const { uploadImage, deleteImage } = require('../services/cloudinary.service');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const logger = require('../utils/logger');
+const {
+  ensureProfile,
+  getProfile: getStoredProfile,
+  mergeAuthAndProfile,
+  resetManualMacroTargets,
+  updateManualMacroTargets,
+  updateProfileAndRecalculate,
+} = require('../services/profile.service');
 
 // ─── Sync user with backend ───────────────────────────────────
 // POST /api/v1/users/sync
@@ -10,6 +18,11 @@ const syncUser = async (req, res) => {
   try {
     const { uid, email, name } = req.user; // set by auth middleware
     const userRecord = await admin.auth().getUser(uid);
+    const profile = await ensureProfile(uid, {
+      email,
+      name,
+      photoURL: userRecord.photoURL || req.user.photoURL || '',
+    });
 
     logger.info(`User synced: ${email}`);
 
@@ -19,6 +32,7 @@ const syncUser = async (req, res) => {
       name,
       photoURL: userRecord.photoURL || req.user.photoURL || '',
       photoUrl: userRecord.photoURL || req.user.photoURL || '',
+      ...mergeAuthAndProfile(req.user, profile),
     });
 
   } catch (error) {
@@ -33,6 +47,11 @@ const getProfile = async (req, res) => {
   try {
     const { uid, email, name } = req.user;
     const userRecord = await admin.auth().getUser(uid);
+    const profile = await ensureProfile(uid, {
+      email,
+      name,
+      photoURL: userRecord.photoURL || req.user.photoURL || '',
+    });
 
     return successResponse(res, 200, 'Profile fetched', {
       uid,
@@ -40,11 +59,78 @@ const getProfile = async (req, res) => {
       name,
       photoURL: userRecord.photoURL || req.user.photoURL || '',
       photoUrl: userRecord.photoURL || req.user.photoURL || '',
+      ...mergeAuthAndProfile(req.user, profile),
     });
 
   } catch (error) {
     logger.error(`getProfile error: ${error.message}`);
     return errorResponse(res, 500, 'Failed to fetch profile');
+  }
+};
+
+const updateProfile = async (req, res) => {
+  try {
+    const { uid, email, name, photoURL } = req.user;
+    const currentProfile = await ensureProfile(uid, { email, name, photoURL });
+    const { manualMacrosEnabled, targetCalories, macros, ...safeUpdates } = req.body;
+    const updated = await updateProfileAndRecalculate(uid, safeUpdates, currentProfile, {
+      uid,
+      email,
+      name,
+      photoURL,
+    });
+
+    logger.info(`Profile updated for ${email}`);
+
+    return successResponse(res, 200, 'Profile updated', {
+      ...mergeAuthAndProfile(req.user, {
+        ...currentProfile,
+        ...updated,
+      }),
+    });
+  } catch (error) {
+    logger.error(`updateProfile error: ${error.message}`);
+    return errorResponse(res, error.statusCode || 500, error.message || 'Failed to update profile');
+  }
+};
+
+const updateManualMacros = async (req, res) => {
+  try {
+    const { uid, email, name, photoURL } = req.user;
+    await ensureProfile(uid, { email, name, photoURL });
+    await updateManualMacroTargets(uid, req.body, { uid, email, name, photoURL });
+    const updatedProfile = await getStoredProfile(uid);
+
+    logger.info(`Manual macros updated for ${email}`);
+
+    return successResponse(res, 200, 'Manual macro targets saved', mergeAuthAndProfile(req.user, updatedProfile));
+  } catch (error) {
+    logger.error(`updateManualMacros error: ${error.message}`);
+    return errorResponse(res, error.statusCode || 500, error.message || 'Failed to save manual macro targets');
+  }
+};
+
+const resetManualMacros = async (req, res) => {
+  try {
+    const { uid, email, name, photoURL } = req.user;
+    const currentProfile = await ensureProfile(uid, { email, name, photoURL });
+    const result = await resetManualMacroTargets(uid, currentProfile, { uid, email, name, photoURL });
+    const updatedProfile = await getStoredProfile(uid);
+
+    logger.info(`Manual macros reset for ${email}`);
+
+    return successResponse(res, 200, 'Manual macro targets reset', {
+      ...mergeAuthAndProfile(req.user, updatedProfile),
+      recalculated: {
+        bmr: result.calculated.bmr,
+        tdee: result.calculated.tdee,
+        targetCalories: result.calculated.targetCalories,
+        macros: result.calculated.macros,
+      },
+    });
+  } catch (error) {
+    logger.error(`resetManualMacros error: ${error.message}`);
+    return errorResponse(res, error.statusCode || 500, error.message || 'Failed to reset macro targets');
   }
 };
 
@@ -94,4 +180,11 @@ const updateProfilePhoto = async (req, res) => {
   }
 };
 
-module.exports = { syncUser, getProfile, updateProfilePhoto };
+module.exports = {
+  syncUser,
+  getProfile,
+  updateProfile,
+  updateManualMacros,
+  resetManualMacros,
+  updateProfilePhoto,
+};
