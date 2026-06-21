@@ -1,4 +1,5 @@
 const NutritionLog = require('../models/NutritionLog');
+const { syncDailyNutritionFromLog } = require('./analytics.service');
 const { getTodayDate, formatDate, DEFAULT_TIME_ZONE } = require('../utils/date.utils');
 
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snacks'];
@@ -228,6 +229,7 @@ const addFood = async (userId, payload, timeZone = DEFAULT_TIME_ZONE) => {
   }
 
   await log.save();
+  await syncDailyNutritionFromLog(log);
   return log;
 };
 
@@ -243,6 +245,7 @@ const addWater = async (userId, payload, timeZone = DEFAULT_TIME_ZONE) => {
   log.totals.water += amount;
 
   await log.save();
+  await syncDailyNutritionFromLog(log);
   return log;
 };
 
@@ -278,6 +281,7 @@ const removeFood = async (userId, foodItemId, dateInput, timeZone = DEFAULT_TIME
   }
 
   await log.save();
+  await syncDailyNutritionFromLog(log);
   return log;
 };
 

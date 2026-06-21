@@ -63,6 +63,7 @@ app.use('/api/v1/users', require('./src/routes/user.routes'));
 app.use('/api/v1/foods', require('./src/routes/food.routes'));
 app.use('/api/v1/recipes', require('./src/routes/recipe.routes'));
 app.use('/api/v1/nutrition', require('./src/routes/nutrition.routes'));
+app.use('/api/v1/analytics', require('./src/routes/analytics.routes'));
 // app.use('/api/v1/logs',  require('./src/routes/log.routes'));
 
 // ─── 404 Handler ──────────────────────────────────────────────
