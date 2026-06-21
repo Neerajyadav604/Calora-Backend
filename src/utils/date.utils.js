@@ -113,7 +113,7 @@ const isStrictDateOnlyString = (value) => {
 };
 
 const normalizeDateInput = (input) => {
-  if (!input) {
+  if (input === undefined || input === null || input === '') {
     return new Date();
   }
 
@@ -123,6 +123,19 @@ const normalizeDateInput = (input) => {
     }
 
     return input;
+  }
+
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input)) {
+      throw new Error(`Invalid date input received: ${formatInvalidDateInput(input)}`);
+    }
+
+    const parsedFromEpoch = new Date(input);
+    if (Number.isNaN(parsedFromEpoch.getTime())) {
+      throw new Error(`Invalid date input received: ${formatInvalidDateInput(input)}`);
+    }
+
+    return parsedFromEpoch;
   }
 
   if (typeof input === 'string') {

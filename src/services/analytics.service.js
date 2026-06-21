@@ -53,12 +53,13 @@ const validateDateValue = (label, value) => {
 const sanitizeDate = (dateInput, timeZone = DEFAULT_TIME_ZONE) => {
   const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
 
-  if (!dateInput) {
+  if (dateInput === undefined || dateInput === null || dateInput === '') {
     return getTodayDate(resolvedTimeZone);
   }
 
-  if (dateInput instanceof Date) {
-    return formatDate(dateInput, resolvedTimeZone);
+  if (dateInput instanceof Date || typeof dateInput === 'number') {
+    const normalized = normalizeDateInput(dateInput);
+    return formatDate(normalized, resolvedTimeZone);
   }
 
   if (typeof dateInput === 'string') {
