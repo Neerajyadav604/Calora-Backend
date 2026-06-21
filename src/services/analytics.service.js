@@ -6,6 +6,9 @@ const {
   getTodayDate,
   getStartOfDay,
   getEndOfDay,
+  normalizeDateInput,
+  resolveTimeZone,
+  isValidTimeZone,
 } = require('../utils/date.utils');
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -21,34 +24,72 @@ const toFiniteNumber = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const validateDaysInput = (days) => {
+  if (days === undefined || days === null || days === '') {
+    return 7;
+  }
+
+  const parsed = Number(days);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1 || parsed > 365) {
+    throw createHttpError(400, `Invalid days value received: ${days}`);
+  }
+
+  return parsed;
+};
+
+const validateDateValue = (label, value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const sanitized = sanitizeDate(value, DEFAULT_TIME_ZONE);
+  if (!sanitized) {
+    throw createHttpError(400, `Invalid ${label} received: ${value}`);
+  }
+
+  return sanitized;
+};
+
 const sanitizeDate = (dateInput, timeZone = DEFAULT_TIME_ZONE) => {
+  const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
+
   if (!dateInput) {
-    return getTodayDate(timeZone);
+    return getTodayDate(resolvedTimeZone);
   }
 
   if (dateInput instanceof Date) {
-    return formatDate(dateInput, timeZone);
+    return formatDate(dateInput, resolvedTimeZone);
   }
 
   if (typeof dateInput === 'string') {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      throw createHttpError(400, 'Date must be in YYYY-MM-DD format');
+      throw createHttpError(400, `Invalid date input received: ${dateInput}`);
+    }
+
+    try {
+      normalizeDateInput(dateInput);
+    } catch (error) {
+      throw createHttpError(400, error.message);
     }
 
     return dateInput;
   }
 
-  throw createHttpError(400, 'Invalid date value');
+  throw createHttpError(400, `Invalid date input received: ${String(dateInput)}`);
 };
 
 const shiftDateString = (dateString, dayOffset = 0) => {
   const match = String(dateString || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
-    throw createHttpError(400, 'Date must be in YYYY-MM-DD format');
+    throw createHttpError(400, `Invalid start date received: ${String(dateString)}`);
   }
 
   const [, year, month, day] = match;
   const shifted = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day) + dayOffset));
+  if (Number.isNaN(shifted.getTime())) {
+    throw createHttpError(400, `Invalid start date received: ${String(dateString)}`);
+  }
+
   return shifted.toISOString().slice(0, 10);
 };
 
@@ -57,14 +98,14 @@ const buildDateRange = (start, end) => {
   const matchEnd = String(end || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
 
   if (!matchStart || !matchEnd) {
-    throw createHttpError(400, 'Date must be in YYYY-MM-DD format');
+    throw createHttpError(400, `Invalid date range received: start=${String(start)}, end=${String(end)}`);
   }
 
   const startUtc = Date.UTC(Number(matchStart[1]), Number(matchStart[2]) - 1, Number(matchStart[3]));
   const endUtc = Date.UTC(Number(matchEnd[1]), Number(matchEnd[2]) - 1, Number(matchEnd[3]));
 
   if (startUtc > endUtc) {
-    throw createHttpError(400, 'Start date cannot be after end date');
+    throw createHttpError(400, `Start date cannot be after end date: start=${start}, end=${end}`);
   }
 
   const dates = [];
@@ -82,7 +123,7 @@ const normalizeRecordedAt = (value) => {
 
   const recordedAt = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(recordedAt.getTime())) {
-    throw createHttpError(400, 'Invalid recordedAt value');
+    throw createHttpError(400, `Invalid recordedAt received: ${String(value)}`);
   }
 
   return recordedAt;
@@ -147,17 +188,18 @@ const getWeightHistory = async (userId, { from, to, limit = 50 } = {}, timeZone 
     throw createHttpError(400, 'User ID is required');
   }
 
+  const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
   const query = { userId: String(userId).trim() };
 
   if (from || to) {
     query.recordedAt = {};
     if (from) {
-      const fromDate = sanitizeDate(from, timeZone);
-      query.recordedAt.$gte = getStartOfDay(fromDate, timeZone);
+      const fromDate = validateDateValue('from date', from);
+      query.recordedAt.$gte = getStartOfDay(fromDate, resolvedTimeZone);
     }
     if (to) {
-      const toDate = sanitizeDate(to, timeZone);
-      query.recordedAt.$lte = getEndOfDay(toDate, timeZone);
+      const toDate = validateDateValue('to date', to);
+      query.recordedAt.$lte = getEndOfDay(toDate, resolvedTimeZone);
     }
   }
 
@@ -186,9 +228,24 @@ const getAnalyticsSummary = async (userId, { days = 7, endDate } = {}, timeZone 
     throw createHttpError(400, 'User ID is required');
   }
 
-  const resolvedDays = Math.max(1, Math.min(365, Math.trunc(toFiniteNumber(days, 7))));
-  const resolvedEnd = sanitizeDate(endDate, timeZone);
+  const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
+  if (timeZone && !isValidTimeZone(timeZone)) {
+    console.warn(`Invalid timezone received for analytics summary: ${timeZone}. Falling back to ${resolvedTimeZone}.`);
+  }
+
+  const resolvedDays = validateDaysInput(days);
+  const resolvedEnd = validateDateValue('end date', endDate) || getTodayDate(resolvedTimeZone);
   const resolvedStart = shiftDateString(resolvedEnd, -(resolvedDays - 1));
+
+  console.log({
+    days,
+    resolvedDays,
+    endDate,
+    resolvedStart,
+    resolvedEnd,
+    timeZone: resolvedTimeZone,
+    rawTimeZone: timeZone,
+  });
 
   const [dailyRecords, weightRecords] = await Promise.all([
     DailyNutrition.find({
@@ -201,8 +258,8 @@ const getAnalyticsSummary = async (userId, { days = 7, endDate } = {}, timeZone 
     WeightEntry.find({
       userId: String(userId).trim(),
       recordedAt: {
-        $gte: getStartOfDay(resolvedStart, timeZone),
-        $lte: getEndOfDay(resolvedEnd, timeZone),
+        $gte: getStartOfDay(resolvedStart, resolvedTimeZone),
+        $lte: getEndOfDay(resolvedEnd, resolvedTimeZone),
       },
     }).sort({ recordedAt: 1 }),
   ]);
@@ -259,7 +316,7 @@ const getAnalyticsSummary = async (userId, { days = 7, endDate } = {}, timeZone 
       id: entry._id,
       weight: entry.weight,
       recordedAt: entry.recordedAt,
-      date: formatDate(entry.recordedAt, timeZone),
+      date: formatDate(entry.recordedAt, resolvedTimeZone),
     })),
     range: {
       start: resolvedStart,

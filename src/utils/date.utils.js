@@ -1,15 +1,44 @@
-const DEFAULT_TIME_ZONE = process.env.APP_TIME_ZONE || process.env.TIME_ZONE || 'Asia/Kolkata';
+const FALLBACK_TIME_ZONE = 'UTC';
+const RAW_DEFAULT_TIME_ZONE = process.env.APP_TIME_ZONE || process.env.TIME_ZONE || 'Asia/Kolkata';
+
+function isValidTimeZone(timeZone) {
+  if (typeof timeZone !== 'string' || !timeZone.trim()) {
+    return false;
+  }
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timeZone.trim() }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTimeZone(timeZone, fallback = FALLBACK_TIME_ZONE) {
+  if (isValidTimeZone(timeZone)) {
+    return timeZone.trim();
+  }
+
+  if (isValidTimeZone(fallback)) {
+    return fallback;
+  }
+
+  return FALLBACK_TIME_ZONE;
+}
+
+const DEFAULT_TIME_ZONE = resolveTimeZone(RAW_DEFAULT_TIME_ZONE, FALLBACK_TIME_ZONE);
 
 const DATE_FORMATTER_CACHE = new Map();
 const OFFSET_FORMATTER_CACHE = new Map();
 
 const getDateFormatter = (timeZone = DEFAULT_TIME_ZONE) => {
-  const cacheKey = timeZone;
+  const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
+  const cacheKey = resolvedTimeZone;
   if (!DATE_FORMATTER_CACHE.has(cacheKey)) {
     DATE_FORMATTER_CACHE.set(
       cacheKey,
       new Intl.DateTimeFormat('en-CA', {
-        timeZone,
+        timeZone: resolvedTimeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
@@ -21,12 +50,13 @@ const getDateFormatter = (timeZone = DEFAULT_TIME_ZONE) => {
 };
 
 const getOffsetFormatter = (timeZone = DEFAULT_TIME_ZONE) => {
-  const cacheKey = timeZone;
+  const resolvedTimeZone = resolveTimeZone(timeZone, DEFAULT_TIME_ZONE);
+  const cacheKey = resolvedTimeZone;
   if (!OFFSET_FORMATTER_CACHE.has(cacheKey)) {
     OFFSET_FORMATTER_CACHE.set(
       cacheKey,
       new Intl.DateTimeFormat('en-US', {
-        timeZone,
+        timeZone: resolvedTimeZone,
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
@@ -39,18 +69,69 @@ const getOffsetFormatter = (timeZone = DEFAULT_TIME_ZONE) => {
   return OFFSET_FORMATTER_CACHE.get(cacheKey);
 };
 
+const formatInvalidDateInput = (input) => {
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? 'Invalid Date' : input.toISOString();
+  }
+
+  if (input === undefined) {
+    return 'undefined';
+  }
+
+  if (input === null) {
+    return 'null';
+  }
+
+  if (typeof input === 'string') {
+    return input;
+  }
+
+  if (typeof input === 'object') {
+    try {
+      return JSON.stringify(input);
+    } catch {
+      return Object.prototype.toString.call(input);
+    }
+  }
+
+  return String(input);
+};
+
+const isStrictDateOnlyString = (value) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return false;
+  }
+
+  const [, year, month, day] = match;
+  const candidate = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return (
+    candidate.getUTCFullYear() === Number(year) &&
+    candidate.getUTCMonth() + 1 === Number(month) &&
+    candidate.getUTCDate() === Number(day)
+  );
+};
+
 const normalizeDateInput = (input) => {
   if (!input) {
     return new Date();
   }
 
   if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) {
+      throw new Error(`Invalid date input received: ${formatInvalidDateInput(input)}`);
+    }
+
     return input;
   }
 
   if (typeof input === 'string') {
     const dateOnlyMatch = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (dateOnlyMatch) {
+      if (!isStrictDateOnlyString(input)) {
+        throw new Error(`Invalid date input received: ${formatInvalidDateInput(input)}`);
+      }
+
       const [, year, month, day] = dateOnlyMatch;
       return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
     }
@@ -61,7 +142,7 @@ const normalizeDateInput = (input) => {
     }
   }
 
-  throw new Error('Invalid date input');
+  throw new Error(`Invalid date input received: ${formatInvalidDateInput(input)}`);
 };
 
 const getZonedDateParts = (date, timeZone = DEFAULT_TIME_ZONE) => {
@@ -137,6 +218,8 @@ module.exports = {
   isSameDay,
   getStartOfDay,
   getEndOfDay,
+  resolveTimeZone,
+  isValidTimeZone,
   normalizeDateInput,
   getZonedDateParts,
   getTimeZoneOffsetMinutes,
